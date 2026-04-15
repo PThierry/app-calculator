@@ -3,7 +3,7 @@
 # Copyright 2025 Ledger SAS
 # Copyright 2026 H2Lab Development Team
 
-project('sample-c-app', 'c',
+project('calculator-app', 'c',
     meson_version: '>=1.4.0',
     version: '0.0.1',
     default_options: [
