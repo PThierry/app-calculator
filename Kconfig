@@ -1,0 +1,6 @@
+mainmenu "Calculator app"
+
+config CALCULATOR_APP
+    bool "enable sample app"
+    default y
+    select WITH_SENTRY

@@ -1,0 +1,4 @@
+[wrap-git]
+url = https://github.com/PThierry/merlin.git
+revision = usart-support
+depth = 1
