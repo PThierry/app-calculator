@@ -14,7 +14,7 @@ calculator_dep = declare_dependency(
   include_directories: [ calculator_inc ],
 )
 
-sample_app_src += files(
+calculator_src += files(
   'main.c',
   'console.c',
   'stm32_usart_driver.c',
