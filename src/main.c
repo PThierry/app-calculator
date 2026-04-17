@@ -66,7 +66,7 @@ int main(void)
         }
 
         if (len > 0) {
-            (void)stm32_usart_write(USART3_LABEL, (const uint8_t *)output, (size_t)len);
+            (void)console_write((const uint8_t *)output, (size_t)len);
         }
 
         console_display_prompt();

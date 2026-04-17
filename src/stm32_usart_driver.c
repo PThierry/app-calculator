@@ -657,8 +657,11 @@ void stm32_usart_acknowledge_irq(uint32_t IRQn)
      */
     for (size_t i = 0U; i < STM32_USART_MAX_INSTANCES; i++) {
         if (g_usart_slot_used[i]) {
-            (void)merlin_platform_acknowledge_irq(
-                &g_usart_instances[i].platform, IRQn);
+            stm32_usart_isr(&g_usart_instances[i].platform, IRQn);
+            if (IRQn != 0U) {
+                (void)merlin_platform_acknowledge_irq(
+                    &g_usart_instances[i].platform, IRQn);
+            }
         }
     }
 }
