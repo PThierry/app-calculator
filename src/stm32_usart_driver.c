@@ -33,7 +33,6 @@
 #include <inttypes.h>
 #include <stddef.h>
 #include <stdbool.h>
-#include <stdlib.h>
 #include <merlin/buses/usart.h>
 #include <merlin/io.h>
 #include "stm32_usart_driver.h"
@@ -128,6 +127,7 @@ static struct usart_bus_fops g_usart_fops = {
 };
 
 static struct usart_driver g_usart_instances[STM32_USART_MAX_INSTANCES];
+static stm32_usart_private_t g_usart_private[STM32_USART_MAX_INSTANCES];
 static bool g_usart_slot_used[STM32_USART_MAX_INSTANCES];
 
 /**
@@ -155,13 +155,8 @@ static struct usart_driver *stm32_usart_instance_alloc(void)
     for (size_t i = 0U; i < STM32_USART_MAX_INSTANCES; i++) {
         if (!g_usart_slot_used[i]) {
             struct usart_driver *drv = &g_usart_instances[i];
-            stm32_usart_private_t *priv;
+            stm32_usart_private_t *priv = &g_usart_private[i];
 
-            /* Allocate private driver state */
-            priv = (stm32_usart_private_t *)malloc(sizeof(stm32_usart_private_t));
-            if (priv == NULL) {
-                return NULL;
-            }
             priv->rxne_received = false;
             priv->rxne_data = 0U;
 
@@ -191,11 +186,9 @@ static void stm32_usart_instance_free(struct usart_driver *drv)
 {
     for (size_t i = 0U; i < STM32_USART_MAX_INSTANCES; i++) {
         if (&g_usart_instances[i] == drv) {
-            /* Free private driver state */
-            if (drv->private_data != NULL) {
-                free(drv->private_data);
-                drv->private_data = NULL;
-            }
+            g_usart_private[i].rxne_received = false;
+            g_usart_private[i].rxne_data = 0U;
+            drv->private_data = NULL;
             g_usart_slot_used[i] = false;
             return;
         }
