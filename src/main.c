@@ -42,6 +42,8 @@ int main(void)
     if (console_init(USART3_LABEL) != 0) {
         goto err;
     }
+    /* test: acknowledge USART3 global interrupt */
+    __sys_irq_acknowledge(63U); /* USART3 global interrupt */
 
     console_display_prompt();
 
