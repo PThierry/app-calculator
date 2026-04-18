@@ -33,8 +33,10 @@
 #include <inttypes.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <merlin/buses/usart.h>
 #include <merlin/io.h>
+#include <uapi.h>
 #include "stm32_usart_driver.h"
 
 /* -------------------------------------------------------------------------
@@ -460,6 +462,8 @@ static int stm32_usart_fops_configure(struct usart_driver *self,
     usart_write32(self, USART_CR3_OFFSET, cr3);
 
     stm32_usart_enable(self);
+    /* enable irq line (single IRQ for)*/
+    merlin_platform_driver_enable_irqs(&self->platform);
 
     return 0;
 }
@@ -611,10 +615,17 @@ static int stm32_usart_isr(void *self, uint32_t IRQn)
                 priv->rxne_received = true;
             }
 
+
             /* Clear error flags and TC flag */
             usart_write32(drv, USART_ICR_OFFSET,
                           USART_ERROR_CLR | USART_ICR_TCCF);
-
+            /* acknowledge at NVIC level */
+            if (IRQn != 0U) {
+            (void)merlin_platform_acknowledge_irq(
+                &g_usart_instances[i].platform, IRQn);
+            }
+            printf("USART ISR: IRQ %lu acknowledged, RXNE=%u, data=0x%02X\n",
+                   IRQn, (isr & USART_ISR_RXNE) != 0UL, priv->rxne_data);
             return 0;
         }
     }
@@ -720,27 +731,6 @@ int stm32_usart_flush(uint32_t label)
     return stm32_usart_fops_flush(drv);
 }
 
-/**
- * @brief Acknowledge an IRQ across active USART instances.
- * @param IRQn Interrupt line number.
- */
-void stm32_usart_acknowledge_irq(uint32_t IRQn)
-{
-    /*
-     * Scan all active instances and forward the acknowledge to each one.
-     * merlin_platform_driver_irq_dispatch() handles the routing generically;
-     * this function lets a task explicitly acknowledge for a known IRQn.
-     */
-    for (size_t i = 0U; i < STM32_USART_MAX_INSTANCES; i++) {
-        if (g_usart_slot_used[i]) {
-            stm32_usart_isr(&g_usart_instances[i].platform, IRQn);
-            if (IRQn != 0U) {
-                (void)merlin_platform_acknowledge_irq(
-                    &g_usart_instances[i].platform, IRQn);
-            }
-        }
-    }
-}
 
 /**
  * @brief Disable and unmap a USART instance, then free its slot.

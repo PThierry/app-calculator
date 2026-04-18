@@ -87,16 +87,6 @@ int stm32_usart_read(uint32_t label, uint8_t *rdbuf, size_t len);
 int stm32_usart_flush(uint32_t label);
 
 /**
- * @brief Acknowledge a USART/UART controller interrupt.
- *
- * Called from the application wait-for-event loop when EVENT_INTERRUPT is
- * received.  The correct instance is resolved from the IRQ number.
- *
- * @param IRQn interrupt number received from the kernel
- */
-void stm32_usart_acknowledge_irq(uint32_t IRQn);
-
-/**
  * @brief Release a USART/UART controller.
  *
  * Disables the controller, unmaps the device from the caller address
