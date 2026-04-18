@@ -6,11 +6,9 @@
 
 #include <stdint.h>
 #include <stddef.h>
-#include <stdio.h>
 #include <uapi.h>
 #include <platform.h>
 #include <types.h>
-#include "calculator.h"
 #include "console.h"
 #include "stm32_usart_driver.h"
 
@@ -19,7 +17,7 @@
 
 int main(void)
 {
-    char output[96];
+    uint8_t rx_char;
     const struct usart_config uart3_cfg = {
         .baudrate     = 115200U,
         .mode         = USART_MODE_ASYNCHRONOUS,
@@ -45,33 +43,34 @@ int main(void)
     /* test: acknowledge USART3 global interrupt */
     __sys_irq_acknowledge(63U); /* USART3 global interrupt */
 
-    console_display_prompt();
+    if (console_display_prompt() != 0) {
+        goto err;
+    }
 
     for (;;) {
-        int len;
-        char *line;
-        struct calculator_result calc;
+        /* kernel input event buffer */
+        const uint8_t event_buf_size = sizeof(exchange_event_t) + sizeof(uint32_t);
+        uint8_t event_buf[event_buf_size];
+        exchange_event_t *event = (exchange_event_t *)event_buf;
+        uint32_t *IRQn = (uint32_t *)(&event->data[0]);
 
-        line = console_get_line();
-        if (line == NULL) {
+        /* wait for event with 20 ms timeout*/
+        if (__sys_wait_for_event(EVENT_TYPE_IRQ, 20) != STATUS_OK) {
+            /* nothing received, yield CPU */
+            __sys_sched_yield();
+            continue;
+        }
+        /* get back IRQ event from kernel */
+        copy_from_kernel(event_buf, event_buf_size);
+
+        /* get back IRQn, encoded 32 bits, from data tab field and ask merlin to dispatch */
+        merlin_platform_driver_irq_displatch(*IRQn);
+
+        if (stm32_usart_read(USART3_LABEL, &rx_char, 1U) != 0) {
             continue;
         }
 
-        if (calculator_eval_line(line, &calc) != 0) {
-            len = snprintf(output, sizeof(output), "Erreur\r\n");
-        } else if (calc.has_remainder) {
-            len = snprintf(output, sizeof(output), "Resultat: %lu (reste : %lu)\r\n",
-                           (unsigned long)calc.value, (unsigned long)calc.remainder);
-        } else {
-            len = snprintf(output, sizeof(output), "Resultat: %lu\r\n",
-                           (unsigned long)calc.value);
-        }
-
-        if (len > 0) {
-            (void)console_write((const uint8_t *)output, (size_t)len);
-        }
-
-        console_display_prompt();
+        (void)console_process_rx_char(rx_char);
     }
 
 err:

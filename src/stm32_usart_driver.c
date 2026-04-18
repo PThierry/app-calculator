@@ -14,16 +14,37 @@
  * functions take that label as first argument so a single task can drive
  * several USART/UART peripherals at the same time.
  *
- * Operation is intentionally limited to polled mode so that the essential
- * Merlin platform interactions are easy to follow.
+ * Operation modes:
+ * - TX (Transmit): Polled mode. Each byte transmission is verified by polling
+ *   the TXE flag to ensure the character is fully accepted before proceeding
+ *   to the next one.
+ * - RX (Receive): Interrupt mode. The RXNE interrupt is enabled. When a
+ *   character is received, the ISR sets a flag and stores the character data.
+ *   The read function checks this flag; if set, it reads the character and
+ *   clears the flag. If not set, it returns a code indicating no character
+ *   is available yet.
+ *
+ * Expected application usage flow for RX:
+ * 1. Application waits for an IRQ event from the kernel
+ * 2. Application calls dispatch_isr via merlin, which invokes the driver's ISR
+ * 3. Application calls the read function to retrieve the received character
  */
 
 #include <inttypes.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include <stdlib.h>
 #include <merlin/buses/usart.h>
 #include <merlin/io.h>
 #include "stm32_usart_driver.h"
+
+/* -------------------------------------------------------------------------
+ * STM32 USART/UART driver private state structure
+ * ---------------------------------------------------------------------- */
+typedef struct {
+    bool rxne_received;     /**< Flag set by ISR when a character is received */
+    uint8_t rxne_data;      /**< Character received by ISR */
+} stm32_usart_private_t;
 
 /* -------------------------------------------------------------------------
  * STM32 USART/UART register offsets
@@ -134,6 +155,15 @@ static struct usart_driver *stm32_usart_instance_alloc(void)
     for (size_t i = 0U; i < STM32_USART_MAX_INSTANCES; i++) {
         if (!g_usart_slot_used[i]) {
             struct usart_driver *drv = &g_usart_instances[i];
+            stm32_usart_private_t *priv;
+
+            /* Allocate private driver state */
+            priv = (stm32_usart_private_t *)malloc(sizeof(stm32_usart_private_t));
+            if (priv == NULL) {
+                return NULL;
+            }
+            priv->rxne_received = false;
+            priv->rxne_data = 0U;
 
             drv->fops                       = &g_usart_fops;
             drv->platform.devh              = 0;
@@ -144,7 +174,7 @@ static struct usart_driver *stm32_usart_instance_alloc(void)
             drv->platform.driver_fops       = &g_usart_fops;
             drv->platform.platform_fops.isr = stm32_usart_isr;
             drv->platform.type              = DEVICE_TYPE_USART;
-            drv->private_data               = NULL;
+            drv->private_data               = priv;
 
             g_usart_slot_used[i] = true;
             return drv;
@@ -161,6 +191,11 @@ static void stm32_usart_instance_free(struct usart_driver *drv)
 {
     for (size_t i = 0U; i < STM32_USART_MAX_INSTANCES; i++) {
         if (&g_usart_instances[i] == drv) {
+            /* Free private driver state */
+            if (drv->private_data != NULL) {
+                free(drv->private_data);
+                drv->private_data = NULL;
+            }
             g_usart_slot_used[i] = false;
             return;
         }
@@ -374,6 +409,16 @@ static int stm32_usart_fops_configure(struct usart_driver *self,
     if (config->rx_enable) {
         cr1 |= USART_CR1_RE;
     }
+
+    /*
+     * RX interrupt mode: enable RXNE interrupt so the ISR is called when
+     * a character is received. The ISR will set a flag that the read function
+     * checks to know whether a character is available.
+     */
+    if (config->rx_enable) {
+        cr1 |= USART_CR1_RXNEIE;
+    }
+
     usart_write32(self, USART_CR1_OFFSET, cr1);
 
     /* CR2: stop bits, synchronous clock */
@@ -427,16 +472,18 @@ static int stm32_usart_fops_configure(struct usart_driver *self,
 }
 
 /**
- * @brief Write bytes on USART TX.
+ * @brief Write a single byte on USART TX.
  * @param self USART instance.
- * @param wrbuf Buffer to transmit.
- * @param len Number of bytes to transmit.
+ * @param wrbuf Buffer to transmit (only first byte is used).
+ * @param len Ignored (for API compatibility).
  * @return 0 on success, -1 on invalid parameters or hardware failure.
  */
 static int stm32_usart_fops_write(struct usart_driver *self,
                                   const uint8_t *wrbuf, size_t len)
 {
-    if (self == NULL || wrbuf == NULL || len == 0U) {
+    (void)len;  /* Unused: driver handles one byte at a time */
+
+    if (self == NULL || wrbuf == NULL) {
         return -1;
     }
 
@@ -444,27 +491,34 @@ static int stm32_usart_fops_write(struct usart_driver *self,
         return -1;
     }
 
-    for (size_t i = 0U; i < len; i++) {
-        if (stm32_usart_wait_txe(self) != 0) {
-            return -1;
-        }
-        merlin_iowrite8(usart_reg(self, USART_TDR_OFFSET), wrbuf[i]);
+    /* Wait for TX data register to be empty */
+    if (stm32_usart_wait_txe(self) != 0) {
+        return -1;
     }
+
+    /* Send the character */
+    merlin_iowrite8(usart_reg(self, USART_TDR_OFFSET), wrbuf[0]);
 
     return 0;
 }
 
 /**
- * @brief Read bytes from USART RX.
+ * @brief Read a single byte from USART RX.
  * @param self USART instance.
- * @param rdbuf Destination buffer.
- * @param len Number of bytes to read.
- * @return 0 on success, -1 on invalid parameters or hardware failure.
+ * @param rdbuf Destination buffer (only first byte is written).
+ * @param len Ignored (for API compatibility).
+ * @return 0 on success (character read from RX ISR flag),
+ *         1 when no character is available yet,
+ *         -1 on invalid parameters or hardware failure.
  */
 static int stm32_usart_fops_read(struct usart_driver *self,
                                  uint8_t *rdbuf, size_t len)
 {
-    if (self == NULL || rdbuf == NULL || len == 0U) {
+    stm32_usart_private_t *priv;
+
+    (void)len;  /* Unused: driver handles one byte at a time */
+
+    if (self == NULL || rdbuf == NULL) {
         return -1;
     }
 
@@ -472,14 +526,27 @@ static int stm32_usart_fops_read(struct usart_driver *self,
         return -1;
     }
 
-    for (size_t i = 0U; i < len; i++) {
-        if (stm32_usart_wait_rxne(self) != 0) {
-            return -1;
-        }
-        if (stm32_usart_check_and_clear_rx_errors(self) != 0) {
-            return -1;
-        }
-        rdbuf[i] = merlin_ioread8(usart_reg(self, USART_RDR_OFFSET));
+    priv = (stm32_usart_private_t *)self->private_data;
+    if (priv == NULL) {
+        return -1;
+    }
+
+    /*
+     * In interrupt mode, check if the ISR has set the flag indicating
+     * a character is available. Only read if flag is set.
+     */
+    if (!priv->rxne_received) {
+        /* No character available from previous ISR call */
+        return 1;
+    }
+
+    /* Character is available, copy it to buffer and clear flag */
+    rdbuf[0] = priv->rxne_data;
+    priv->rxne_received = false;
+
+    /* Check for any RX errors that may have occurred */
+    if (stm32_usart_check_and_clear_rx_errors(self) != 0) {
+        return -1;
     }
 
     return 0;
@@ -514,6 +581,7 @@ static int stm32_usart_fops_flush(struct usart_driver *self)
 static int stm32_usart_isr(void *self, uint32_t IRQn)
 {
     struct platform_device_driver *pdrv = (struct platform_device_driver *)self;
+    stm32_usart_private_t *priv;
 
     (void)IRQn;
 
@@ -527,18 +595,33 @@ static int stm32_usart_isr(void *self, uint32_t IRQn)
         }
         if (&g_usart_instances[i].platform == pdrv) {
             struct usart_driver *drv = &g_usart_instances[i];
+            const uint32_t isr = usart_read32(drv, USART_ISR_OFFSET);
 
             if (!usart_is_ready(drv)) {
                 return -1;
             }
+
+            priv = (stm32_usart_private_t *)drv->private_data;
+            if (priv == NULL) {
+                return -1;
+            }
+
             /*
-             * In polled mode the ISR only clears pending error and TC flags
-             * so that the controller does not stay stuck when an interrupt
-             * fires.  A real driver would dispatch received bytes to a ring
-             * buffer here.
+             * In interrupt mode:
+             * - If RXNE flag is set, read the received character and set
+             *   the flag to indicate it's available for the read function.
+             * - Clear error flags to prevent the peripheral from hanging.
+             * - Clear TC flag if it was set.
              */
+            if ((isr & USART_ISR_RXNE) != 0UL) {
+                priv->rxne_data = merlin_ioread8(usart_reg(drv, USART_RDR_OFFSET));
+                priv->rxne_received = true;
+            }
+
+            /* Clear error flags and TC flag */
             usart_write32(drv, USART_ICR_OFFSET,
                           USART_ERROR_CLR | USART_ICR_TCCF);
+
             return 0;
         }
     }
