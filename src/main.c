@@ -66,10 +66,10 @@ int main(void)
         /* get back IRQn, encoded 32 bits, from data tab field and ask merlin to dispatch */
         merlin_platform_driver_irq_displatch(*IRQn);
 
-        if (stm32_usart_read(USART3_LABEL, &rx_char, 1U) != 0) {
+        if (stm32_usart_read(USART3_LABEL, &rx_char) != 0) {
             continue;
         }
-
+        /* let the console module processing the received character */
         (void)console_process_rx_char(rx_char);
     }
 

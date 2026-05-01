@@ -28,15 +28,13 @@ static int console_write_bytes(const uint8_t *buf, size_t len)
     }
 
     for (size_t i = 0U; i < len; i++) {
-        if (stm32_usart_write(g_console_uart_label, &buf[i], 1U) != 0) {
+        if (stm32_usart_write(g_console_uart_label, buf[i]) != 0) {
+            return -1;
+        }
+        if (stm32_usart_flush(g_console_uart_label) != 0) {
             return -1;
         }
     }
-
-    if (stm32_usart_flush(g_console_uart_label) != 0) {
-        return -1;
-    }
-
     return 0;
 }
 

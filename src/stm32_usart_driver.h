@@ -58,7 +58,7 @@ int stm32_usart_init(uint32_t label, const struct usart_config *cfg);
  *
  * @return 0 on success, -1 on failure
  */
-int stm32_usart_write(uint32_t label, const uint8_t *wrbuf, size_t len);
+int stm32_usart_write(uint32_t label, const uint8_t data);
 
 /**
  * @brief Receive bytes from a USART/UART RX path.
@@ -72,7 +72,7 @@ int stm32_usart_write(uint32_t label, const uint8_t *wrbuf, size_t len);
  *
  * @return 0 on success, -1 on failure
  */
-int stm32_usart_read(uint32_t label, uint8_t *rdbuf, size_t len);
+int stm32_usart_read(uint32_t label, uint8_t *rdbuf);
 
 /**
  * @brief Wait for all pending TX data to be shifted out.

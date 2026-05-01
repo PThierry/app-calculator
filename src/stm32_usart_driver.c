@@ -507,41 +507,10 @@ static int stm32_usart_fops_write(struct usart_driver *self,
 static int stm32_usart_fops_read(struct usart_driver *self,
                                  uint8_t *rdbuf, size_t len)
 {
-    stm32_usart_private_t *priv;
-
-    (void)len;  /* Unused: driver handles one byte at a time */
-
-    if (self == NULL || rdbuf == NULL) {
-        return -1;
-    }
-
-    if (!usart_is_ready(self)) {
-        return -1;
-    }
-
-    priv = (stm32_usart_private_t *)self->private_data;
-    if (priv == NULL) {
-        return -1;
-    }
-
-    /*
-     * In interrupt mode, check if the ISR has set the flag indicating
-     * a character is available. Only read if flag is set.
+    /* read is in interrupt mode, the ISR is responsible for loading locally in
+     * driver private data the received char. this fops implementation is
+     * not used.
      */
-    if (!priv->rxne_received) {
-        /* No character available from previous ISR call */
-        return 1;
-    }
-
-    /* Character is available, copy it to buffer and clear flag */
-    rdbuf[0] = priv->rxne_data;
-    priv->rxne_received = false;
-
-    /* Check for any RX errors that may have occurred */
-    if (stm32_usart_check_and_clear_rx_errors(self) != 0) {
-        return -1;
-    }
-
     return 0;
 }
 
@@ -675,7 +644,7 @@ int stm32_usart_init(uint32_t label, const struct usart_config *cfg)
  * @param len Number of bytes to transmit.
  * @return 0 on success, -1 on failure.
  */
-int stm32_usart_write(uint32_t label, const uint8_t *wrbuf, size_t len)
+int stm32_usart_write(uint32_t label, const uint8_t data)
 {
     struct usart_driver *drv = stm32_usart_instance_get(label);
 
@@ -683,25 +652,39 @@ int stm32_usart_write(uint32_t label, const uint8_t *wrbuf, size_t len)
         return -1;
     }
 
-    return stm32_usart_fops_write(drv, wrbuf, len);
+    return stm32_usart_fops_write(drv, &data, 1);
 }
 
 /**
  * @brief Public read API for a specific USART instance.
+ *
+ * if a character is available from the RX ISR, it is copied to the provided buffer
+ * and the function returns 0. If no character is available yet, the function returns 1.
+ *
  * @param label DTS label of the target USART peripheral.
  * @param rdbuf Destination buffer.
  * @param len Number of bytes to read.
  * @return 0 on success, -1 on failure.
  */
-int stm32_usart_read(uint32_t label, uint8_t *rdbuf, size_t len)
+int stm32_usart_read(uint32_t label, uint8_t *rdbuf)
 {
     struct usart_driver *drv = stm32_usart_instance_get(label);
-
     if (drv == NULL) {
         return -1;
     }
-
-    return stm32_usart_fops_read(drv, rdbuf, len);
+    stm32_usart_private_t *priv = (stm32_usart_private_t *)drv->private_data;
+    if (priv == NULL) {
+        return -1;
+    }
+    if (rdbuf == NULL) {
+        return -1;
+    }
+    if (priv->rxne_received) {
+        rdbuf[0] = priv->rxne_data;
+        priv->rxne_received = false;
+        return 0;
+    }
+    return 1;
 }
 
 /**
@@ -720,27 +703,6 @@ int stm32_usart_flush(uint32_t label)
     return stm32_usart_fops_flush(drv);
 }
 
-/**
- * @brief Acknowledge an IRQ across active USART instances.
- * @param IRQn Interrupt line number.
- */
-void stm32_usart_acknowledge_irq(uint32_t IRQn)
-{
-    /*
-     * Scan all active instances and forward the acknowledge to each one.
-     * merlin_platform_driver_irq_dispatch() handles the routing generically;
-     * this function lets a task explicitly acknowledge for a known IRQn.
-     */
-    for (size_t i = 0U; i < STM32_USART_MAX_INSTANCES; i++) {
-        if (g_usart_slot_used[i]) {
-            stm32_usart_isr(&g_usart_instances[i].platform, IRQn);
-            if (IRQn != 0U) {
-                (void)merlin_platform_acknowledge_irq(
-                    &g_usart_instances[i].platform, IRQn);
-            }
-        }
-    }
-}
 
 /**
  * @brief Disable and unmap a USART instance, then free its slot.
