@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <uapi.h>
 #include <platform.h>
 #include <types.h>
@@ -40,12 +41,12 @@ int main(void)
     if (console_init(USART3_LABEL) != 0) {
         goto err;
     }
-    /* test: acknowledge USART3 global interrupt */
-    __sys_irq_acknowledge(63U); /* USART3 global interrupt */
 
     if (console_display_prompt() != 0) {
         goto err;
     }
+
+    printf("Console initialized. Waiting for input...\n");
 
     for (;;) {
         /* kernel input event buffer */
@@ -54,8 +55,8 @@ int main(void)
         exchange_event_t *event = (exchange_event_t *)event_buf;
         uint32_t *IRQn = (uint32_t *)(&event->data[0]);
 
-        /* wait for event with 20 ms timeout*/
-        if (__sys_wait_for_event(EVENT_TYPE_IRQ, 20) != STATUS_OK) {
+        /* wait for event as long as enough */
+        if (__sys_wait_for_event(EVENT_TYPE_IRQ, 0) != STATUS_OK) {
             /* nothing received, yield CPU */
             __sys_sched_yield();
             continue;

@@ -461,6 +461,7 @@ static int stm32_usart_fops_configure(struct usart_driver *self,
 
     stm32_usart_enable(self);
 
+    merlin_platform_driver_enable_irqs(&self->platform);
     return 0;
 }
 
